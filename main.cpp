@@ -41,8 +41,8 @@ int generate_key(const int thread_id, const std::uint64_t max_iteration, bool *t
     std::uint64_t counter = 0;
     bool satisfied = false;
 
-    __attribute__((aligned(64))) std::uint8_t hash[32];
-    __attribute__((aligned(64))) std::uint8_t public_key_binary[384];
+    std::uint8_t hash[32];
+    std::uint8_t public_key_binary[384];
     size_t public_key_binary_len;
 
     while (!satisfied && counter++ < max_iteration && !*terminate)
@@ -58,9 +58,9 @@ int generate_key(const int thread_id, const std::uint64_t max_iteration, bool *t
 
         const std::uint8_t *address = hash + 12;
 
-        // if (*(std::uint32_t *)(address + 16) == 0x88888888 /* && *(std::uint32_t *)(hash + 28) == 0x36363636*/)
-        // if (*(std::uint16_t *)(address + 18) == 0x8888  && *(std::uint16_t *)(hash + 0) == 0x6666)
-        if (*(std::uint16_t *)(address + 18) == 0x8888)
+        // if (*(std::uint32_t *)(address + 16) == 0x88888888 /* && *(std::uint32_t *)(address + 0) == 0x36363636*/)
+        if (*(std::uint16_t *)(address + 18) == 0x8888  && *(std::uint8_t *)(address + 0) == 0x66)
+        //if (*(std::uint16_t *)(address + 18) == 0x8888)
         // if (*(std::uint8_t *)(address + 19) == 0x88)
         {
             satisfied = true;
@@ -102,16 +102,19 @@ double compute_difficulty(unsigned int length)
 
 int main()
 {
+    _putenv("KMP_AFFINITY=granularity=fine,scatter");
+    ::omp_set_num_threads(32);
+	
     bool terminate = false;
 
-    const int pattern_length = 4;
+    const int pattern_length = 6;
     const double difficulty = compute_difficulty(pattern_length);
     const double prob50addrs = compute_probability50_addresses_count(difficulty);
 
     std::uint64_t max = 1'000'000'000;
     int nthreads = ::omp_get_max_threads();
 
-    std::uint64_t batchsize = 1000;
+    std::uint64_t batchsize = 500;
     std::uint64_t batchcount = max / batchsize;
     std::uint64_t finished_batches = 0;
 
