@@ -1,80 +1,70 @@
 #include <cstdio>
 #include <climits>
 #include <cmath>
-#include <mkl/mkl.h>
+#include <iostream>
+#include <iomanip>
+
+#include <mbedtls/ecdsa.h>
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
+
+#include <immintrin.h>
+
+#include "keccak-tiny.h"
+
+static void dump_buf(const char *title, unsigned char *buf, size_t len)
+{
+    size_t i;
+
+    printf("%s", title);
+    for (i = 0; i < len; i++)
+        printf("%c%c", "0123456789ABCDEF"[buf[i] / 16],
+               "0123456789ABCDEF"[buf[i] % 16]);
+    printf("\n");
+}
+
+static void dump_pubkey(const char *title, mbedtls_ecdsa_context *key)
+{
+    unsigned char buf[300];
+    size_t len;
+
+    if (mbedtls_ecp_point_write_binary(&key->grp, &key->Q, MBEDTLS_ECP_PF_UNCOMPRESSED, &len, buf, sizeof buf) != 0)
+    {
+        printf("internal error\n");
+        return;
+    }
+
+    dump_buf(title, buf, len);
+
+    char priv[256] = {0};
+    if (mbedtls_mpi_write_string(&key->d, 16, priv, 256, &len) != 0)
+    {
+        printf("internal error\n");
+        return;
+    }
+    printf("priv: %s\n", priv);
+
+    char hash[32] = {0};
+    keccak3_256((std::uint8_t *)hash, 32, buf + 1, len - 1);
+
+    dump_buf("addr: ", (unsigned char *)hash, 32);
+}
 
 int main()
 {
-    MKLVersion Version;
+    int ret;
 
-    mkl_get_version(&Version);
+    mbedtls_ecdsa_context ecctx;
+    mbedtls_entropy_context entropy;
+    mbedtls_ctr_drbg_context ctr_drbg;
 
-    printf("Major version:           %d\n", Version.MajorVersion);
-    printf("Minor version:           %d\n", Version.MinorVersion);
-    printf("Update version:          %d\n", Version.UpdateVersion);
-    printf("Product status:          %s\n", Version.ProductStatus);
-    printf("Build:                   %s\n", Version.Build);
-    printf("Platform:                %s\n", Version.Platform);
-    printf("Processor optimization:  %s\n", Version.Processor);
-    printf("================================================================\n");
-    printf("\n");
+    mbedtls_ctr_drbg_init(&ctr_drbg);
+    mbedtls_ecdsa_init(&ecctx);
+    mbedtls_entropy_init(&entropy);
+    mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy, nullptr, 0);
+    mbedtls_ecdsa_genkey(&ecctx, MBEDTLS_ECP_DP_SECP256K1, mbedtls_ctr_drbg_random, &ctr_drbg);
 
-    static_assert(sizeof(int) == 4, "LP64 model required");
-
-    double r[1000]; /* buffer for random numbers */
-    double s;       /* average */
-    VSLStreamStatePtr stream;
-    int i, j;
-
-    /* Initializing */
-    s = 0.0;
-    vslNewStream(&stream, VSL_BRNG_R250, 777);
-
-    auto neg = 0;
-    auto pos = 0;
-    auto zero = 0;
-
-    int appr[256] = {};
-
-    /* Generating */
-    for (i = 0; i < 10000000; i++)
-    {
-        unsigned char privateKey[32];
-        auto status = viRngUniform(VSL_RNG_METHOD_UNIFORM_STD, stream, 8, (int *)privateKey, INT_MIN, INT_MAX);
-        if (status != VSL_ERROR_OK)
-        {
-            throw;
-        }
-
-        for (int i = 0; i < 32; ++i)
-        {
-            appr[privateKey[i]]++;
-        }
-    }
-
-    /* Deleting the stream */
-    vslDeleteStream(&stream);
-
-    double sum = 0.;
-
-    for (int i = 0; i < 256; ++i)
-    {
-        printf("%d ", appr[i]);
-        sum += appr[i];
-    }
-    printf("\n");
-
-    auto mean = sum / 256.;
-
-    auto var = 0.;
-    for (int i = 0; i < 256; ++i) {
-        auto diff = appr[i] - mean;
-        auto v = diff * diff;
-        var += v;
-    }
-    auto stdev = sqrt(var);
-
-    printf("mean %f, stdev %f\n", mean, stdev);
+    dump_pubkey("  + Public key: ", &ecctx);
 
     return 0;
 }
