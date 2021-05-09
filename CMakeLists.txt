@@ -6,6 +6,11 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_C_STANDARD 11)
 
+find_package(OpenMP REQUIRED)
+
+list(APPEND CMAKE_C_FLAGS ${OpenMP_C_FLAGS})
+list(APPEND CMAKE_CXX_FLAGS ${OpenMP_CXX_FLAGS})
+
 # find_package(GnuTLS REQUIRED)
 find_package(MbedTLS REQUIRED)
 
@@ -27,4 +32,5 @@ add_compile_options(-mrdrnd)
 
 add_executable(ethAddressGenerator main.cpp keccak-tiny-unrolled.c keccak-tiny.h)
 target_include_directories(ethAddressGenerator SYSTEM PRIVATE ${GNUTLS_INCLUDE_DIR})
+target_link_options(ethAddressGenerator PRIVATE ${OpenMP_EXE_LINKER_FLAGS})
 target_link_libraries(ethAddressGenerator ${GNUTLS_LIBRARIES} ${MBEDTLS_LIBRARIES})
