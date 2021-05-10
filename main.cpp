@@ -8,15 +8,19 @@
 
 #include <omp.h>
 
-#include <mbedtls/ecdsa.h>
-#include <mbedtls/ctr_drbg.h>
-#include <mbedtls/entropy.h>
+#include <ippcp.h>
+
+#include "secp256k1.h"
 
 #include <immintrin.h>
 
 #include "keccak-tiny.h"
 
-static void print_hex(unsigned char *buf, size_t len)
+static const std::size_t IPP_PRNG_SIZE_MAX = 512;
+static const int PRIVATE_KEY_SIZE = 32;
+// static const std::uint64_t ONE = 0x01lu;
+
+static void print_hex(const std::uint8_t *buf, const std::size_t len)
 {
     for (size_t i = 0; i < len; i++)
     {
@@ -24,94 +28,111 @@ static void print_hex(unsigned char *buf, size_t len)
     }
 }
 
-int generate_key(const int thread_id, const std::uint64_t max_iteration, bool *terminate)
+static void print_address(const std::uint8_t *private_key, const std::uint8_t *public_key_full_hash)
+{
+#pragma omp critical
+    {
+        printf("Private key:\t");
+        print_hex(private_key, PRIVATE_KEY_SIZE);
+        printf("\nAddress:\t");
+        print_hex(public_key_full_hash + 12, 20);
+        printf("\n");
+    }
+}
+
+static int generate_key(const std::uint64_t max_iteration, bool *terminate)
 {
     int rc;
 
-    mbedtls_ecdsa_context ecctx;
-    mbedtls_entropy_context entropy;
-    mbedtls_ctr_drbg_context ctr_drbg;
+    secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
+    secp256k1_pubkey public_key;
+    std::uint8_t private_key[PRIVATE_KEY_SIZE];
 
-    mbedtls_ctr_drbg_init(&ctr_drbg);
-    mbedtls_ecdsa_init(&ecctx);
-    mbedtls_entropy_init(&entropy);
+    IppStatus status;
 
-    rc = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy, nullptr, 0);
+    // generate random
+    Ipp8u prng_data[IPP_PRNG_SIZE_MAX];
+    IppsPRNGState *prng = reinterpret_cast<IppsPRNGState *>(prng_data);
+    status = ippsPRNGInit(160, prng);
+    status = ippsPRNGenRDRAND(reinterpret_cast<Ipp32u *>(private_key), PRIVATE_KEY_SIZE * 8, prng);
 
     std::uint64_t counter = 0;
     bool satisfied = false;
 
-    __attribute__((aligned(64))) std::uint8_t hash[32];
-    __attribute__((aligned(64))) std::uint8_t public_key_binary[384];
-    size_t public_key_binary_len;
+    std::uint8_t public_key_full_hash[32];
+    std::uint8_t public_key_binary[384];
 
     while (!satisfied && counter++ < max_iteration && !*terminate)
     {
-        rc = mbedtls_ecdsa_genkey(&ecctx, MBEDTLS_ECP_DP_SECP256K1, mbedtls_ctr_drbg_random, &ctr_drbg);
+        // add one to last few bytes every time
+        std::uint64_t *pk_end = reinterpret_cast<std::uint64_t *>(private_key + (PRIVATE_KEY_SIZE - sizeof(std::uint64_t)));
+        *pk_end += 1;
+        // +1 without carry. it's uint64 so you don't need carry anyway. wrap is fine.
 
-        rc = mbedtls_ecp_point_write_binary(&(ecctx.grp), &(ecctx.Q), MBEDTLS_ECP_PF_UNCOMPRESSED,
-                                            &public_key_binary_len, public_key_binary, sizeof(public_key_binary));
+        size_t public_key_binary_len = 384;
 
-        keccak3_256(hash, 32, public_key_binary + 1, public_key_binary_len - 1);
+        rc = secp256k1_ec_pubkey_create(ctx, &public_key, private_key);
+        secp256k1_ec_pubkey_serialize(ctx, public_key_binary, &public_key_binary_len, &public_key, SECP256K1_EC_UNCOMPRESSED);
 
-        // satisfied = true;
+        keccak3_256(public_key_full_hash, 32, public_key_binary + 1, public_key_binary_len - 1);
 
-        const std::uint8_t *address = hash + 12;
+        const std::uint8_t *address = public_key_full_hash + 12;
 
         // if (*(std::uint32_t *)(address + 16) == 0x88888888 /* && *(std::uint32_t *)(hash + 28) == 0x36363636*/)
-        // if (*(std::uint16_t *)(address + 18) == 0x8888  && *(std::uint16_t *)(hash + 0) == 0x6666)
-        if (*(std::uint16_t *)(address + 18) == 0x8888)
+        if (*(std::uint16_t *)(address + 18) == 0x8888 && *(std::uint16_t *)(address + 0) == 0x6666)
+        // if (*(std::uint16_t *)(address + 18) == 0x8888)
         // if (*(std::uint8_t *)(address + 19) == 0x88)
         {
             satisfied = true;
         }
     }
 
+    secp256k1_context_destroy(ctx);
+
     if (satisfied)
     {
-#pragma omp critical
-        {
-            char priv[256] = {0};
-            size_t len;
-            mbedtls_mpi_write_string(&(ecctx.d), 16, priv, 256, &len) != 0;
-            printf("[thread %d]:\nPrivate key: %s\nAddress: ", thread_id, priv);
-            print_hex(hash + 12, 20);
-            printf("\n");
-        }
+        print_address(private_key, public_key_full_hash);
         return 0;
     }
 
     return 1;
 }
 
-double compute_probability50_addresses_count(double difficulty)
+static double compute_probability50_addresses_count(double difficulty)
 {
     return std::floor(std::log(0.5) / std::log(1. - (1. / difficulty)));
 }
 
-double compute_probability(double difficulty, std::uint64_t attempts)
+static double compute_probability(double difficulty, std::uint64_t attempts)
 {
     double prob = 1 - std::pow(1. - (1. / difficulty), attempts);
     return std::round(10000. * prob) / 100.;
 };
 
-double compute_difficulty(unsigned int length)
+static double compute_difficulty(unsigned int length)
 {
     return std::pow(16, length);
 };
 
 int main()
 {
+    int prng_size = 0;
+    ippsPRNGGetSize(&prng_size);
+    if (prng_size > IPP_PRNG_SIZE_MAX || !prng_size)
+    {
+        throw;
+    }
+
     bool terminate = false;
 
-    const int pattern_length = 4;
+    const int pattern_length = 8;
     const double difficulty = compute_difficulty(pattern_length);
     const double prob50addrs = compute_probability50_addresses_count(difficulty);
 
-    std::uint64_t max = 1'000'000'000;
+    std::uint64_t max = 1'000'000'000'000'000;
     int nthreads = ::omp_get_max_threads();
 
-    std::uint64_t batchsize = 1000;
+    std::uint64_t batchsize = 1'000'000;
     std::uint64_t batchcount = max / batchsize;
     std::uint64_t finished_batches = 0;
 
@@ -128,12 +149,9 @@ int main()
 
         int tid = ::omp_get_thread_num();
 
-#pragma omp critical
-        printf("Starting batch %d, thread id %d\n", i, tid);
-
         auto start = std::chrono::high_resolution_clock::now();
 
-        int result = generate_key(tid, batchsize, &terminate);
+        int result = generate_key(batchsize, &terminate);
         if (result == 0)
         {
             terminate = true;
@@ -142,14 +160,16 @@ int main()
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = end - start;
         auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-        double key_per_second = batchsize / (duration_ms / 1000.);
+        double duration_s = duration_ms / 1000.;
+        double key_per_second = batchsize / duration_s;
+
+        double prob = compute_probability(difficulty, (finished_batches + 1) * batchsize);
 
 #pragma omp atomic update
         ++finished_batches;
-        double prob = compute_probability(difficulty, finished_batches * batchsize);
 
 #pragma omp critical
-        printf("Batch %d finished. Avg %f keys per second. Prob %.2f%%\n", i, key_per_second, prob);
+        printf("Batch %d finished in %.2fs. Avg %.2f keys per second. Prob %.2f%%\n", i, duration_s, key_per_second, prob);
     }
 
     return 0;
