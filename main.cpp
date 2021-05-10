@@ -79,8 +79,9 @@ static int generate_key(const std::uint64_t max_iteration, bool *terminate)
         const std::uint8_t *address = public_key_full_hash + 12;
 
         // if (*(std::uint32_t *)(address + 16) == 0x88888888 /* && *(std::uint32_t *)(hash + 28) == 0x36363636*/)
-        if (*(std::uint16_t *)(address + 18) == 0x8888 && *(std::uint16_t *)(address + 0) == 0x6666)
-        // if (*(std::uint16_t *)(address + 18) == 0x8888)
+        if ((*(std::uint32_t *)(address + 16) & 0xFFFFFF00) == 0x88888800 && (*(std::uint32_t *)(address + 0) & 0x00FFFFFF) == 0x00666666)
+        // if ((*(std::uint32_t *)(address + 16) & 0xFFFF0000) == 0x88880000)
+        // if ((*(std::uint32_t *)(address + 0) & 0x000000FF) == 0x00000088)
         // if (*(std::uint8_t *)(address + 19) == 0x88)
         {
             satisfied = true;
@@ -125,7 +126,7 @@ int main()
 
     bool terminate = false;
 
-    const int pattern_length = 8;
+    const int pattern_length = 12;
     const double difficulty = compute_difficulty(pattern_length);
     const double prob50addrs = compute_probability50_addresses_count(difficulty);
 
@@ -138,6 +139,8 @@ int main()
 
     printf("Scheduling %d batches for %d threads, batch size %d\n", batchcount, nthreads, batchsize);
     printf("50%% probability addresses: %.0f, difficulty: %.0f\n", prob50addrs, difficulty);
+
+    auto master_start = std::chrono::high_resolution_clock::now();
 
 #pragma omp parallel for schedule(dynamic, 1) shared(terminate)
     for (int i = 0; i < batchcount; ++i)
@@ -169,8 +172,15 @@ int main()
         ++finished_batches;
 
 #pragma omp critical
-        printf("Batch %d finished in %.2fs. Avg %.2f keys per second. Prob %.2f%%\n", i, duration_s, key_per_second, prob);
+        printf("Batch %d finished in %.2fs. Avg %.2f keys per second. Prob %.4f%%\n", i, duration_s, key_per_second, prob);
     }
+
+    auto master_end = std::chrono::high_resolution_clock::now();
+    auto master_duration = master_end - master_start;
+    auto master_duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(master_duration).count();
+    double master_duration_s = master_duration_ms / 1000.;
+    double master_key_per_second = batchsize * finished_batches / master_duration_s;
+    printf("Total %d batch executed in %.2fs. Avg %.2f keys per second\n", finished_batches, master_duration_s, master_key_per_second);
 
     return 0;
 }
