@@ -86,6 +86,11 @@ static int generate_key(const std::uint64_t max_iteration, bool *terminate)
         {
             satisfied = true;
         }
+
+        //if (counter == 10)
+        //{
+        //    print_address(private_key, public_key_full_hash);
+        //}
     }
 
     secp256k1_context_destroy(ctx);
