@@ -117,6 +117,9 @@ static double compute_difficulty(unsigned int length)
 
 int main()
 {
+    _putenv("KMP_AFFINITY=granularity=fine,scatter");
+    ::omp_set_num_threads(32);
+	
     int prng_size = 0;
     ippsPRNGGetSize(&prng_size);
     if (prng_size > IPP_PRNG_SIZE_MAX || !prng_size)
@@ -142,8 +145,8 @@ int main()
 
     auto master_start = std::chrono::high_resolution_clock::now();
 
-#pragma omp parallel for schedule(dynamic, 1) shared(terminate)
-    for (int i = 0; i < batchcount; ++i)
+//#pragma omp parallel for schedule(dynamic, 1) shared(terminate)
+    for (int i = 0; i < 1; ++i)
     {
         if (terminate)
         {
